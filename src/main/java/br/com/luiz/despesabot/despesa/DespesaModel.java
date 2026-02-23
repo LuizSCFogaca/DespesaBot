@@ -6,8 +6,10 @@ import org.hibernate.annotations.CreationTimestamp;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import lombok.Data;
-
+import br.com.luiz.despesabot.user.UserModel;
 
 @Data
 @Entity(name="tb_despesas")
@@ -22,5 +24,9 @@ public class DespesaModel {
 
     @CreationTimestamp
     private LocalDateTime dateTime;
+
+    @ManyToOne
+    @JoinColumn(name = "user_id")
+    private UserModel user;
     
 }

@@ -1,11 +1,15 @@
 package br.com.luiz.despesabot.telegrambot;
+
 import br.com.luiz.despesabot.despesa.DespesaModel;
 import br.com.luiz.despesabot.despesa.DespesaRepository;
+import br.com.luiz.despesabot.user.UserModel;
+import br.com.luiz.despesabot.user.UserRepository;
 
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -20,9 +24,11 @@ public class DespesaTelegramBot extends TelegramLongPollingBot {
     @Value("${telegram.bot.username}")
     private String botUsername;
 
-    // Injetamos o repositório que você já havia criado para salvar no H2
     @Autowired
     private DespesaRepository despesaRepository;
+    
+    @Autowired
+    private UserRepository userRepository;
 
     public DespesaTelegramBot(@Value("${telegram.bot.token}") String botToken) {
         super(botToken);
@@ -33,26 +39,52 @@ public class DespesaTelegramBot extends TelegramLongPollingBot {
         return botUsername;
     }
 
-    // Este método é chamado toda vez que alguém manda mensagem pro bot
     @Override
     public void onUpdateReceived(Update update) {
         if (update.hasMessage() && update.getMessage().hasText()) {
             String mensagem = update.getMessage().getText();
             long chatId = update.getMessage().getChatId();
+            
+            Long telegramUserId = update.getMessage().getFrom().getId();
 
+            // 1. Busca o usuário ou cria um NOVO no estado AGUARDANDO_NOME
+            UserModel user = userRepository.findByTelegramUserId(telegramUserId)
+                .orElseGet(() -> {
+                    UserModel novoUsuario = new UserModel();
+                    novoUsuario.setTelegramUserId(telegramUserId);
+                    novoUsuario.setEstado("AGUARDANDO_NOME"); // Define o estado inicial
+                    return userRepository.save(novoUsuario);
+                });
+
+            // 2. Lógica de Cadastro (Intercepta a mensagem antes de verificar comandos)
+            if ("AGUARDANDO_NOME".equals(user.getEstado())) {
+                if (mensagem.equals("/start")) {
+                    enviarMensagem(chatId, "Olá! Bem-vindo ao seu Bot de Despesas. 🤖\n\nPara começarmos, como você gostaria de ser chamado?");
+                } else {
+                    // Se o estado é AGUARDANDO_NOME e não é /start, assumimos que a mensagem é o nome
+                    user.setUsername(mensagem.trim());
+                    user.setEstado("ATIVO"); // Atualiza o estado para liberar os comandos
+                    userRepository.save(user);
+                    
+                    enviarMensagem(chatId, "Prazer em te conhecer, " + user.getUsername() + "! 🎉\nSeu cadastro foi concluído.\n\nComandos disponíveis:\n'/nova [nome] [valor]' para adicionar uma despesa.\n'/despesas [mês] [ano]' para receber um relatório.");
+                }
+                return; // Interrompe a execução aqui para não cair nos ifs de baixo
+            }
+
+            // 3. Execução normal de comandos (Só chega aqui se o estado for ATIVO)
             if (mensagem.startsWith("/nova")) {
-                registrarDespesa(chatId, mensagem);
+                registrarDespesa(chatId, mensagem, user);
             } else if (mensagem.equals("/start")) {
-                enviarMensagem(chatId, "Olá! Eu sou o seu Bot de Despesas. \n \n Comandos:\n '/nova [nome] [valor]' para adicionar uma despesa. \n '/despesas [mês] [ano]' para receber um relatório de suas despesas");
-            } else if(mensagem.startsWith("/despesa")){
-                enviarDespesas(chatId, mensagem);
-            }else{
-                enviarMensagem(chatId, "Comando não reconhecido.");
+                enviarMensagem(chatId, "Olá novamente, " + user.getUsername() + "! 👋 \n\nComandos disponíveis:\n'/nova [nome] [valor]' para adicionar uma despesa.\n'/despesas [mês] [ano]' para receber um relatório.");
+            } else if(mensagem.startsWith("/despesas")){
+                enviarDespesas(chatId, mensagem, user);
+            } else {
+                enviarMensagem(chatId, "Comando não reconhecido, " + user.getUsername() + ".");
             }
         }
     }
 
-    private void enviarDespesas(long chatId, String mensagem) {
+    private void enviarDespesas(long chatId, String mensagem, UserModel user) {
         try {
             String textoDespesa = mensagem.replace("/despesas", "").trim();
             String[] partes = textoDespesa.split(" ");
@@ -68,34 +100,34 @@ public class DespesaTelegramBot extends TelegramLongPollingBot {
             LocalDateTime start = yearMonth.atDay(1).atStartOfDay();
             LocalDateTime end = yearMonth.atEndOfMonth().atTime(23, 59, 59);
 
-            List<DespesaModel> despesas = despesaRepository.findByDateTimeBetween(start, end);
+            List<DespesaModel> despesas = despesaRepository.findByUserAndDateTimeBetween(user, start, end);
 
             if (despesas.isEmpty()) {
-                enviarMensagem(chatId, "Nenhuma despesa encontrada para " + String.format("%02d", mes) + "/" + ano + ".");
+                enviarMensagem(chatId, "Nenhuma despesa encontrada para você em " + String.format("%02d", mes) + "/" + ano + ".");
                 return;
+            }
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("📋 *Seu Relatório de Despesas - ").append(String.format("%02d", mes)).append("/").append(ano).append("*\n");
+            sb.append("---------------------------------------\n\n");
+
+            DateTimeFormatter formatadorData = DateTimeFormatter.ofPattern("dd/MM HH:mm");
+
+            for (DespesaModel d : despesas) {
+                String dataFormatada = d.getDateTime().format(formatadorData);
+                sb.append("🔹 *").append(d.getName()).append("*\n");
+                sb.append("   Valor: R$").append(d.getValor()).append("\n");
+                sb.append("   Data: ").append(dataFormatada).append("\n\n");
+            }
+            enviarMensagem(chatId, sb.toString());
+            
+        } catch (Exception e) {
+            enviarMensagem(chatId, "❌ Erro ao enviar relatório de despesas.\nFormato Esperado: /despesas Mês(01, 02..., 12) Ano(2025)");
         }
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("📋 *Relatório de Despesas - ").append(String.format("%02d", mes)).append("/").append(ano).append("*\n");
-        sb.append("---------------------------------------\n\n");
-
-        DateTimeFormatter formatadorData = DateTimeFormatter.ofPattern("dd/MM HH:mm");
-
-        for (DespesaModel d : despesas) {
-            String dataFormatada = d.getDateTime().format(formatadorData);
-            sb.append("🔹 *").append(d.getName()).append("*\n");
-            sb.append("   Descrição: ").append(d.getValor()).append("\n");
-            sb.append("   Data: ").append(dataFormatada).append("\n\n");
-        }
-        enviarMensagem(chatId, sb.toString());
-    } catch (Exception e) {
-        enviarMensagem(chatId, "❌ Erro ao enviar relatório de despesas.\nFormato Esperado: /despesas Mês(01, 02..., 12) Ano(2025)");
     }
-}
 
-    private void registrarDespesa(long chatId, String mensagem) {
+    private void registrarDespesa(long chatId, String mensagem, UserModel user) {
         try {
-            // Exemplo simples de parser da string: "/nova Almoço - Restaurante da esquina"
             String textoDespesa = mensagem.replace("/nova", "").trim();
             String[] partes = textoDespesa.split(" ");
             
@@ -106,10 +138,10 @@ public class DespesaTelegramBot extends TelegramLongPollingBot {
             despesa.setName(nome);
             despesa.setValor(descricao);
             
-            // Salva no banco de dados H2
+            despesa.setUser(user);
             despesaRepository.save(despesa);
 
-            enviarMensagem(chatId, "✅ Despesa '" + nome + "' salva com sucesso no banco de dados!");
+            enviarMensagem(chatId, "✅ Despesa '" + nome + "' salva com sucesso para " + user.getUsername() + "!");
 
         } catch (Exception e) {
             enviarMensagem(chatId, "❌ Erro ao salvar despesa. Formato esperado: /nova Nome - Descrição");

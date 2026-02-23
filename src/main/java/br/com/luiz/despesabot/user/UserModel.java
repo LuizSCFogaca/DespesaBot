@@ -1,6 +1,8 @@
 package br.com.luiz.despesabot.user;
 
 import java.util.UUID;
+
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.Id;
@@ -14,6 +16,9 @@ public class UserModel {
     @GeneratedValue(generator = "UUID")
     private UUID idUsers;
 
-    private String username;
+    @Column(unique = true)
+    private Long telegramUserId;
 
+    private String username;
+    private String estado;
 } 
