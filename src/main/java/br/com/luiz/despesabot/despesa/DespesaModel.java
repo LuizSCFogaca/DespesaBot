@@ -15,10 +15,10 @@ public class DespesaModel {
 
     @Id
     @GeneratedValue(generator = "UUID")
-    private UUID id;
+    private UUID idDespesas;
 
     private String name;
-    private String description;
+    private String valor;
 
     @CreationTimestamp
     private LocalDateTime dateTime;
